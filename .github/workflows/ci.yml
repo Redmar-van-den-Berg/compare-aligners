@@ -28,7 +28,7 @@ jobs:
     - uses: conda-incubator/setup-miniconda@v2.0.1
       # https://github.com/conda-incubator/setup-miniconda.
       with:
-        activate-environment: snakemake-project
+        activate-environment: compare-aligners
         environment-file: environment.yml
         auto-activate-base: false
 
