@@ -1,0 +1,14 @@
+- name: sanity-snakemake
+  tags:
+    - sanity
+  command: |
+    snakemake --version
+
+- name: sanity-singularity
+  tags:
+    - sanity
+  command: |
+    singularity --version
+  stdout:
+    contains:
+      - singularity version 3

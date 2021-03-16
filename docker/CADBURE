@@ -1,0 +1,498 @@
+#!/usr/bin/perl -w
+use strict;
+#Author Praveen K. Raj Kumar; rajkump at miamioh.edu [or] rpraveenkumardcb at gmail.com
+use Bio::DB::Sam;
+use HTML::Table;
+
+
+#Main Program
+#CADBURE : comparing alignment results of user data based on the relative reliability of uniquely aligned reads 
+#Compares two alignment results(in bam format)
+#outputs read name list invoved in the described scenarios, whose alignment can be viewed with any bam viewer like Tablet(Milne et. al., 2013.)
+#Scenarios
+#(1) Whenever the two aligners (BAM files) uniquely map a particular read to the exact same location, CADBURE considers the result a true-positive mapping for both aligner.
+#(2) and (3) When the two aligners uniquely map a particular read to overlapping genomic locations, CADBURE distinguishes two scenarios. <br>
+##	(2) In this case, CADBURE considers the un-spliced alignment or splice alignment with overhang more than two nucleotides a true-positive mapping because all or most nucleotides are continuously mapped by both aligners on the same genome location. Therefore, this is a highly probable correct alignment for this read (see Article Fig. 1c).  
+##	(3) If the overhang of the spliced alignment is just one or two nucleotides, i.e., only one or two nucleotides are aligned across an intron, CADBURE considers the spliced alignment as a false-positive alignment, given the high probability that the alignment is misplaced (see Article Fig. 1c).
+# (4) If both aligners uniquely map a particular read to different genomic locations, CADBURE assigns the mapping as false-positive because both aligners missed the possible read mapping reported by the other aligner and incorrectly reported the alignment as unique (see Article Fig 1d).
+#(5) If one aligner maps a particular read uniquely and the other aligner maps the same read non-uniquely, CADBURE considers the uniquely aligned read as a false-positive alignment and the non-uniquely mapped read as a true-negative, non-unique mapping (see Article Fig. 1e). 
+#(6) If only one of the two aligners uniquely maps a particular sequence read, and if the other aligner fails to map this read at all (either as unique or non-unique), CADBURE considers the unique mapping a true-positive alignment (see Article Fig. 1f). 
+#(7) If both aligners map a particular read non-uniquely, CADBURE calls the alignment a true-negative, non-unique alignment (see Article Fig. 1g).<br>
+#(8) If one aligner maps a particular read non-uniquely and the other aligner fails to map the read as either unique or non-unique, CADBURE considers the alignment true-negative (see Article Fig 1h).
+####################################################
+
+my $usage = "\nUsage: perl $0 -f <align1_name> -fb <align1_bam> -s <align2_name> -sb <align2_bam> -o <out_file>\n
+            \n\t-f: Name of the first aligner\n
+            \n\t-fb: BAM file for first aligner \n
+            \n\t-s: Name of the second aligner\n
+            \n\t-sb: BAM file for second aligner \n
+	    \n\t-o: Name of outfile(prefix only) \n\n";
+
+my ($align1_name,$align1_bam,$align2_name,$align2_bam,$out);
+if ($#ARGV != 9){
+    print $usage;
+    exit;
+}else{
+    for (my $i=0; $i < $#ARGV; $i++){
+	if ($ARGV[$i] eq "-f")		{
+	    $align1_name = $ARGV[($i+1)];
+            $i++;
+        }elsif ($ARGV[$i] eq "-fb"){
+            $align1_bam = $ARGV[($i+1)];
+            $i++;
+        }elsif ($ARGV[$i] eq "-s"){
+            $align2_name = $ARGV[($i+1)];
+            $i++;
+        }elsif ($ARGV[$i] eq "-sb"){
+            $align2_bam = $ARGV[($i+1)];
+            $i++;
+        }elsif ($ARGV[$i] eq "-o"){
+            $out = $ARGV[($i+1)];
+            $i++;
+        }        
+    }
+}
+
+# Chhecking whether I get bam file
+unless ($align2_bam =~ /.*\.bam$/i)  {
+    print "\n\t$align2_bam does not have the suffix '.bam'
+            $align2_bam should be a bam file see below for usage
+            $usage";
+    exit;
+}
+
+unless ($align1_bam =~ /.*\.bam$/i)  {
+    print "\n\t$align1_bam does not have the suffix '.bam'
+            $align1_bam should be a bam file see below for usage
+            $usage";
+    exit;
+}
+
+###################### Let the user know CADBURE is working on user bam file comparison ##################################################
+print "\n\n\t Hello USER!!!!!!  Your inputs are all in place
+	CADBURE working on it !!!!!
+	Comparing $align1_bam\t with \t$align2_bam
+	
+	Check Back in an hour or less \n";
+#exit;
+#**************>>>>>>>****** For simplicity first and second aligner VARIABLES will be prefixed G and T respectively ************<<<<<<<<<**************
+my $G_Pve_hash;# hashref to collect UQ (unique) mappings from first aligner BAM --Our assumed positive
+my $T_Pve_hash;# hashref to collect UQ (unique) mappngs from Second aligner BAM --Our assumed positive
+my $G_Nve_hash;#hashref to collect NUQ (non unique) mappings from first aligner BAM --Our assumed negative
+my $T_Nve_hash;#hashref to collect NUQ (non unique) mappings from Second aligner BAM --Our assumed negative
+
+$G_Pve_hash = readBAM($align1_bam,0);# 0 to return unique mappings only hash
+$T_Pve_hash = readBAM($align2_bam,0);# 0 to return unique mappings only hash
+
+$G_Nve_hash = readBAM($align1_bam,1);# 1 to return  NUQ (non-unique)  only hash
+$T_Nve_hash = readBAM($align2_bam,1);# 1 to return  NUQ (non-unique) only hash
+
+createDIR();
+
+my ($Pve_return_values,$Nve_return_values) = CompHASH($G_Pve_hash,$T_Pve_hash,$G_Nve_hash,$T_Nve_hash,$align1_name,$align2_name);
+
+my ($rec_eq,$G_ov_hg_ls2,$G_ov_hg_gt3,$T_ov_hg_ls2,$T_ov_hg_gt3,$diff_chr,$G_UQ_T_NoMap,$T_UQ_G_NoMap) = split(/\|/,$Pve_return_values);
+my ($read_eq_NUQ,$G_UQ_pre_T_NUQ,$T_UQ_pre_G_NUQ,$G_NUQ_T_NoMap,$T_NUQ_G_NoMap) = split(/\|/,$Nve_return_values);
+#print "$read_eq_NUQ\t$G_UQ_pre_T_NUQ\t$T_UQ_pre_G_NUQ\t$G_NUQ_T_NoMap\t$T_NUQ_G_NoMap\n";
+
+#====================POSITIVE CASES==================================#
+my $G_tp = $rec_eq + $G_ov_hg_gt3 + $G_UQ_T_NoMap; #true positives in First aligner 
+my $G_fp = $G_ov_hg_ls2 + $diff_chr + $G_UQ_pre_T_NUQ; #false positives in $align1_name 
+
+my $T_tp = $rec_eq + $T_ov_hg_gt3 + $T_UQ_G_NoMap;  #true positives in Second-aligner
+my $T_fp = $T_ov_hg_ls2 + $diff_chr + $T_UQ_pre_G_NUQ; #false positives in $align2_name
+#+++++++++++++++++++POSITIVE CASES+++++++++++++++++++++++++++++++++#
+
+#====================NEGATIVE CASES==================================#
+my $G_tn = $read_eq_NUQ + $G_NUQ_T_NoMap + $T_UQ_pre_G_NUQ; #True negative for first aligner
+## False negative case will not be calculated
+my $T_tn = $read_eq_NUQ + $T_NUQ_G_NoMap + $G_UQ_pre_T_NUQ; #True negative for Second aligner
+#+++++++++++++++++++NEGATIVE CASES+++++++++++++++++++++++++++++++++#
+
+#$$$$$$$$$$$$$$$$$$$$$$$$$***Sensitivity, Specificity and Accuracy****$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$#
+# Specificity formula #TN / (#TN + #FP)
+#Since we do not find FN (False Negative, i.e., disadv of Non Unique Mappings) I only calculate Specificity and Accuracy
+#Accuracy formula (#TP + #TN)/(#TP + #TN + #FP +#FN)
+
+my $episolon = 1.175e-38; # ---****-->this variable is to survive Illegal division by zero<--****----
+
+my $G_Sfy = sprintf "%.4f", $G_tn / ($G_tn + $G_fp + $episolon); ##### First-aligner  Specificity#### formula #TN / (#TN + #FP)
+my $G_Acy = sprintf "%.4f",($G_tp + $G_tn)/($G_tp + $G_tn + $G_fp); #Accuracy formula (#TP + #TN)/(#TP + #TN + #FP +#FN) excluding FN
+
+my $T_Sfy = sprintf "%.4f",$T_tn / ($T_tn + $T_fp + $episolon); ##### Second-aligner  Specificity#### formula #TN / (#TN + #FP)
+my $T_Acy = sprintf "%.4f",($T_tp + $T_tn)/($T_tp + $T_tn + $T_fp); #Accuracy formula (#TP + #TN)/(#TP + #TN + #FP +#FN) excluding FN
+#!!!!!!!!!!!!!!!!!!!!!!!!END***Sensitivity and Specificity****!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!#
+
+
+
+####################printing the output as html file ##############################    
+printHTML($align1_name,$align2_name,$rec_eq,$G_ov_hg_ls2,$T_ov_hg_ls2,$G_ov_hg_gt3,$T_ov_hg_gt3,$diff_chr,
+	  $G_UQ_pre_T_NUQ,$T_UQ_pre_G_NUQ,$G_UQ_T_NoMap,$T_UQ_G_NoMap,$read_eq_NUQ,$G_NUQ_T_NoMap,$T_NUQ_G_NoMap,
+	  $G_tp, $G_fp, $G_tn, $G_Sfy, $G_Acy,
+	  $T_tp, $T_fp, $T_tn, $T_Sfy, $T_Acy,$out);
+
+print "\tI am DONE!!!! \n\n \tIf you would like to ascertain significance of differences between both the accuracy and specificity of alignment results  use the accompanied run_bootstrap.r\n\n";
+###End Main Program
+
+#function to create directories for printing the read list involved in the scenarios
+sub createDIR{
+    for (my $i = 1;$i < 9; $i++){
+        unless(-e "Scenario_$i" or mkdir "Scenario_$i",0755) {
+            die "Unable to create Scenario_$i";
+        }
+    }
+}
+
+#function to read BAM file
+sub readBAM{
+    my $BAM = shift;
+    my $case = shift; # 0 to collect assumed positive (UQ mapping),1 to collect assumed negaitve (NUQ mappings)
+
+    my $bam          = Bio::DB::Bam->open($BAM) || die "\nSorry Unable to open $BAM\n\t make sure $BAM file exists\n" ;
+    my $header       = $bam->header;
+    my $target_count = $header->n_targets;
+    my $target_names = $header->target_name;
+    my %hash;
+    while (my $align = $bam->read1) {
+        my $refName     = $target_names->[$align->tid];
+        my $start     = $align->pos+1;
+        my $end       = $align->calend;
+        my $cigar     = $align->cigar_str;
+        my $queryName  = $align->query->name;
+        if ($case == 0) { #only to collect UQ mappings
+            my $NH_val = $align->aux_get("NH");
+	    my $is_unmapped = $align->unmapped;
+	    #print $is_unmapped."\n\n";
+	    if($is_unmapped == 0 && !defined $NH_val){ #Return true if the read failed to align
+		print "\n\n\n\t\t\tOops!!! This mapped read --> $queryName with cigar --> $cigar in --> $BAM does not have SAM flag --> NH *********** \n";
+		die "\t\t\tCADBURE requires --> NH flag to discriminate Unique and Non-unique mappings. Hence I QUIT \n \t\t\tPlease make sure SAM file have --> NH flag for --> mapped reads for next time\n\n";
+	    }
+            if(defined $NH_val && length $NH_val > 0){#NH tag will be present only for mapped reads
+                if ($NH_val == 1) {
+                    my $value = join('|',$refName,$start,$end,$cigar);
+                    $hash{$queryName}=$value;
+                    #print "I am here collecting uq mappings\n";
+                }else{
+                    next;
+                }
+            }else{
+		next;
+            }
+        }elsif ($case == 1) {#1 to collect assumed negaitve (NUQ mappings)
+            my $NH_val = $align->aux_get("NH");
+            if(defined $NH_val && length $NH_val > 0){#NH tag will be present only for mapped reads
+                if ($NH_val > 1) {
+                    my $value = join('|',$refName,$start,$end,$cigar);
+                    $hash{$queryName}=$value;
+                }else{
+                    next;
+                }
+            }else{
+                next;
+            }
+        }
+    }
+    
+    return \%hash;
+}
+
+
+#function to compare hash
+sub CompHASH {
+    my $G_Pve_hash = shift;
+    my $T_Pve_hash = shift;
+    my $G_Nve_hash = shift;
+    my $T_Nve_hash = shift;
+    my $align1_name = shift;
+    my $align2_name = shift;
+    #following block is for dereferenceing hash
+    my %G_Pve_hash = %$G_Pve_hash;
+    my %T_Pve_hash = %$T_Pve_hash;
+    my %G_Nve_hash = %$G_Nve_hash;
+    my %T_Nve_hash = %$T_Nve_hash;
+    
+    my $rec_eq = 0;# [S11]  both aligners agree the given read is uniquely mapped
+    
+    my $G_ov_hg_gt3 = 0;# [S3G] First-aligner splice alignment overhang >= 3
+    my $T_ov_hg_gt3 = 0;# [S3T] Second-aligner splice alignment overhang >= 3
+    my $G_ov_hg_ls2 = 0;# [S2G] First-aligner splice alignment overhang <= 2
+    my $T_ov_hg_ls2 = 0;# [S2T] Second-aligner splice alignment overhang <= 2
+    
+    my $diff_chr = 0; #[S4]  both aligners report it as Unique mapping but align it to non-overlapping regions
+    
+    my $G_UQ_pre_T_NUQ = 0; # [S5G]  First-aligner reports it as UQ but Second-aligner reported as  Non-Unique
+    my $T_UQ_pre_G_NUQ = 0; # [S5T]  Second-aligner reports it as UQ but First-aligner reported as Non-Unique
+    
+    my $G_UQ_T_NoMap = 0; # [S6G]  First-aligner reports it as UQ but Second-aligner could not align in any condition
+    my $T_UQ_G_NoMap = 0; # [S6T]  Second-aligner reports it as UQ but First-aligner could not align in any condition
+    
+    my $read_eq_NUQ = 0; # [S7] both aligners agree to report it as Non Unique
+    
+    
+    my $G_NUQ_T_NoMap = 0; # [S8G]  First-aligner reports it as N-UQ but Second-aligner could not align in any condition
+    my $T_NUQ_G_NoMap = 0; # [S8T]  Second-aligner reports it as N-UQ but First-aligner could not align in any condition
+    
+    
+################################################### Open output files to write #######################################
+#Output files for Scenario 1
+    # [S1] Both aligners agree to report the read mapping as unique to a loci and with the same alignment (TP); TP ---> True Positive
+    open (S1, ">Scenario_1/Read-List_Scenario-1_TP_bothAligners.txt") || die "can not write to Scenario_1/Read-List_Scenatio-1_bothAligners.txt\n";
+    print S1 "# [S1] Both aligners agree to report the following read mappings as unique to a loci and with the same alignment (TP); TP ---> True Positive\n";
+#Output files for Scenario 2
+    #[S2G] overhang of spliced alignment is lesser than or equal to 2 in First Aligner ; FP --> FALSE positive   
+    open (S3G, ">Scenario_2/Read-List_Scenario-2_FP_$align1_name.txt") || die "can not write to Scenario_2/Read-List_Scenario-2_FP_$align1_name.txt\n";
+    print S3G "#Both aligners agree to report the following read mappings as unique to a loci but disagree on alignment\n";
+    print S3G "#where a spliced alignment overhang of less than or equal to two bases for following reads\n";
+    #[S2T] overhang of spliced alignment is lesser than or equal to 2 in Second Aligner ; FP --> FALSE positive
+    open (S3T, ">Scenario_2/Read-List_Scenario-2_FP_$align2_name.txt") || die "can not write to Scenario_2/Read-List_Scenario-2_FP_$align2_name.txt\n";
+    print S3T "#Both aligners agree to report the following read mappings as unique to a loci but disagree on alignment\n";
+    print S3T "##where a spliced alignment overhang of less than or equal to two bases for following reads";
+#Output files for Scenario 3        
+    #[S3G] No spliced alignment or overhang greater than 2 in First Aligner ; TP --> true positive   
+    open (S2G, ">Scenario_3/Read-List_Scenario-3_TP_$align1_name.txt") || die "can not write to Scenario_3/Read-List_Scenario-3_TP_$align1_name.txt\n";
+    print S2G "#Both aligners agree to report the following read mappings as unique to a loci but disagree on alignment\n";
+    print S2G "#where there is no spliced alignment or the overhang of spliced alignment is greater than 2 bases for the following reads\n";
+    #[S3T] No splice alignment or overhang greater than 2 in Second Aligner ; TP --> true positive   
+    open (S2T, ">Scenario_3/Read-List_Scenario-3_TP_$align2_name.txt") || die "can not write to Scenario_3/Read-List_Scenario-3_TP_$align2_name.txt\n";
+    print S2T "#Both aligners agree to report the following read mappings as unique to a loci but disagree on alignment\n";
+    print S2T "#where there is no spliced alignment or the overhang of spliced alignment is greater than 2 bases for the following reads\n";
+#Output files for Scenario 4
+    # [S4] Both aligner report the read mappings as unique but to a non-overlapping loci; FP --> FALSE positive
+    open (S4, ">Scenario_4/Read-List_Scenario-4_FP_bothAligners.txt") || die "can not write to Scenario_4/Read-List_Scenario-4_FP_bothAligners.txt\n";
+    print S4 "#Both aligners report the following read mappings as unique but to a non-overlapping loci; FP --> FALSE positive\n";
+#Output files for Scenario 5
+    #[S5G] First aligner reports the read mapping as unique to a loci (FP) but the Second aligner reports the same as non-unique to more than one loci (TN); FP --> False Positive, TN --> True negative
+    open (S5G,">Scenario_5/Read-List_Scenario-5_FP_$align1_name.TN_$align2_name.txt") || die "can not write to >Scenario_5/Read-List_Scenario-5_FP_$align1_name.TN_$align2_name.txt\n";
+    print S5G "#First aligner reports the read mapping as unique to a loci (FP) but the Second aligner reports the same as non-unique to more than one loci (TN); FP --> False Positive, TN --> True negative\n";
+    #[S5T] Second aligner reports the read mapping as unique to a loci (FP) but the First aligner reports the same as non-unique to more than one loci (TN); FP --> False Positive, TN --> True negative
+    open (S5T, ">Scenario_5/Read-List_Scenario-5_FP_$align2_name.TN_$align1_name.txt") || die "can not write to >Scenario_5/Read-List_Scenario-5_FP_$align2_name.TN_$align1_name.txt\n";
+    print S5T "#Second aligner reports the following read mappings as unique to a loci (FP) but the First aligner reports the same as non-unique to more than one loci (TN); FP --> False Positive, TN --> True negative\n";
+#Output files for Scenario 6
+    #[S6G] First aligner reports the read mapping as unique to a loci (TP) but the Second aligner could not map the same; TP --> True Positive
+    open (S6G, ">Scenario_6/Read-List_Scenario-6_TP_$align1_name.txt") || die "can not write to Scenario_6/Read-List_Scenario-6_TP_$align1_name.txt\n";
+    print S6G "#First aligner reports the following read mappings as unique to a loci (TP) but the Second aligner could not map the same; TP --> True Positive\n";
+    #[S6T] Second aligner reports the read mapping as unique to a loci (TP) but the First aligner could not map the same; TP --> True Positive
+    open (S6T, ">Scenario_6/Read-List_Scenario-6_TP_$align2_name.txt") || die "can not write to Scenario_6/Read-List_Scenario-6_TP_$align2_name.txt\n";
+    print S6T "#Second aligner report the following read mappings as unique to a loci (TP) but the First aligner could not map the same; TP --> True Positive\n";
+#Output files for Scenario 7
+    #[S7] Both aligners agree to report the read mapping as non-unique (TN); TN --> True Negative
+    open (S7, ">Scenario_7/Read-List_Scenario-7_TN_bothAligners.txt") || die "can not write to Scenario_7/Read-List_Scenario-7_TN_bothAligners.txt\n";
+    print S7 "#Both aligners agree to report the read mapping as non-unique to multiple loci (TN); TN --> True Negative\n";
+#Output files for Scenario 8    
+    #[S8G] First aligner reports the read mapping as non-unique to a loci (TN) but the Second aligner could not map the same; TN --> True Negative
+    open (S8G, ">Scenario_8/Read-List_Scenario-8_TN_$align1_name.txt") || die "can not write to Scenario_8/Read-List_Scenario-8_TN_$align1_name.txt\n";
+    print S8G "#First aligner reports the following read mappings as non-unique to multiple loci (TN) but the Second aligner could not map the same; TN --> True Negative\n";
+    #[S8T] Second aligner reports the read mapping as non-unique to a loci (TN) but the First aligner could not map the same; TN --> True Negative
+    open (S8T, ">Scenario_8/Read-List_Scenario-8_TN_$align2_name.txt") || die "can not write to Scenario_8/Read-List_Scenario-8_TN_$align2_name.txt\n";
+    print S8T "#Second aligner reports the following read mappings as non-unique to multiple loci (TN) but the First aligner could not map the same; TN --> True Negative\n";
+################################################### work on the comparisons #######################################    
+    
+    foreach  my $key(sort keys %G_Pve_hash ) {#First aligner positive hash vs Second aligner positive hash
+        if ( exists $T_Pve_hash{$key} ) { #if First aligner mapped read has mapping in second alinger
+            if ( $G_Pve_hash{$key} eq $T_Pve_hash{$key} ) { #read mapping is exactly same in both aligners
+                ++$rec_eq;
+		print S1 "$key\n";
+            }else {
+                my ($GrefName,$Gstart,$Gend,$Gcigar)=split('\|',$G_Pve_hash{$key});
+                my ($TrefName,$Tstart,$Tend,$Tcigar)=split('\|',$T_Pve_hash{$key});
+                if ($GrefName =~ /^$TrefName$/ && (($Gstart <= $Tstart && $Gend >= $Tstart) || ($Gstart <= $Tend && $Gend >= $Tend) ||
+						   ($Tstart <= $Gstart && $Tend >= $Gstart) || ($Tstart <= $Gend && $Tend >= $Gend))) { #if read map to overlapping regions
+                    my $G_lowOverHang = findLowOverHang($G_Pve_hash{$key});
+                    if ($G_lowOverHang<= 2) {
+                       ++$G_ov_hg_ls2;
+		       print S3G "$key\n";
+                    }else{
+                        ++$G_ov_hg_gt3;
+			print S2G "$key\n";
+                    }
+                    
+                    my $T_lowOverHang = findLowOverHang($T_Pve_hash{$key});
+                    if ($T_lowOverHang<= 2) {
+                       ++$T_ov_hg_ls2;
+		       print S3T "$key\n";
+                    }else{
+                        ++$T_ov_hg_gt3;
+			print S2T "$key\n";
+                    }
+                }else{#if read mapped to non-overlapping regions
+                    ++$diff_chr;
+		    print S4 "$key\n";
+                }                
+            }
+        }elsif(exists $T_Nve_hash{$key}){ ##First aligner positive hash vs Second aligner negative hash
+            ++$G_UQ_pre_T_NUQ; #First-aligner reports it as UQ but Second-aligner reported as Non-Unique
+	    print S5G "$key\n";
+        }
+        else{ 
+            ++$G_UQ_T_NoMap;   #First-aligner reports it as UQ but Second-aligner could not Map in any condition
+	    print S6G "$key\n";
+        }
+    }
+    
+    foreach  my $key(sort keys %T_Pve_hash ) { 
+        if ( exists $G_Pve_hash{$key} ) { #Second aligner positive hash vs First aligner positive hash
+            next; #beacuse this case is already counted see above
+        } 
+        elsif( exists $G_Nve_hash{$key} ) { ##Second aligner positive hash vs First aligner negative hash
+            ++$T_UQ_pre_G_NUQ; # Second-aligner reports it as UQ but First-aligner reported as Non-Unique
+	    print S5T "$key\n";
+        }else{
+            ++$T_UQ_G_NoMap; #Second-aligner reports it as UQ but First-aligner could not align in any condition
+	    print S6T "$key\n";
+        }
+    }
+    
+    foreach  my $key(sort keys %G_Nve_hash ) {
+        if ( exists $T_Nve_hash{$key} ) { #First aligner negative hash vs Second aligner negative hash
+            ++$read_eq_NUQ; # both aligners agree to report it as Non Unique
+	    print S7 "$key\n";
+        }elsif(exists $T_Pve_hash{$key}){ #First aligner negative hash vs Second aligner positive hash
+            next; #because this case is already counted see above
+        }else{
+           ++$G_NUQ_T_NoMap; # First-aligner reports it as N-UQ but Second-aligner could not align in any condition
+	   print S8G "$key\n";
+        }
+    }
+    
+    foreach  my $key(sort keys %T_Nve_hash ) {
+        if ( exists $G_Nve_hash{$key} ) { #Second aligner negative hash vs First aligner negative hash
+            next; #because this case is already counted see above
+        }elsif(exists $G_Pve_hash{$key}){ #Second aligner negative hash vs First aligner positive hash
+            next; #because this case is already counted see above
+        }else{
+           ++$T_NUQ_G_NoMap; # Second-aligner reports it as N-UQ but First-aligner could not align in any condition
+	   print S8T "$key\n";
+        }
+    }
+    
+    #return values for positive cases
+    my $Pve_return_values = join('|',$rec_eq,$G_ov_hg_ls2,$G_ov_hg_gt3,$T_ov_hg_ls2,$T_ov_hg_gt3,$diff_chr,$G_UQ_T_NoMap,$T_UQ_G_NoMap);
+    
+    #return values for negative cases
+    my $Nve_return_values = join('|',$read_eq_NUQ,$G_UQ_pre_T_NUQ,$T_UQ_pre_G_NUQ,$G_NUQ_T_NoMap,$T_NUQ_G_NoMap);
+    
+    #print "$read_eq_NUQ\t$G_UQ_pre_T_NUQ\t$T_UQ_pre_G_NUQ\t$G_NUQ_T_NoMap\t$T_NUQ_G_NoMap\n";
+    #exit;#added this to get only differed values
+    return $Pve_return_values,$Nve_return_values;
+}
+
+ 
+#function to parse CIGAR
+sub findLowOverHang{
+    my $hash_value = shift;
+    my ($refName,$start,$end,$cigar)=split('\|',$hash_value);
+    my $value;
+    my @mat_nos;
+    for(my $i = 0; $i <= length($cigar); $i++){
+        my $v = substr($cigar,$i,1);
+        #print "$v\n";
+        if($v=~/\d/){$value.=$v;}
+        if($v eq "M"){
+            push (@mat_nos, $value);
+            #print "$i M has $value matches\n";
+            #$length+=$value;
+            $value="";
+        }elsif($v =~ /[IDNSHP]/){
+            $value="";
+        }
+        
+    }
+    @mat_nos = sort {$a <=> $b} @mat_nos;
+    my $low_overhang = $mat_nos[0];
+    return $low_overhang;
+    
+}
+
+
+
+#function to print a html output
+sub printHTML{
+    my ($align1_name,$align2_name,$rec_eq,$G_ov_hg_ls2,$T_ov_hg_ls2,$G_ov_hg_gt3,$T_ov_hg_gt3,$diff_chr,
+	  $G_UQ_pre_T_NUQ,$T_UQ_pre_G_NUQ,$G_UQ_T_NoMap,$T_UQ_G_NoMap,$read_eq_NUQ,$G_NUQ_T_NoMap,$T_NUQ_G_NoMap,
+	  $G_tp, $G_fp, $G_tn, $G_Sfy, $G_Acy,
+	  $T_tp, $T_fp, $T_tn, $T_Sfy, $T_Acy,$out) = @_;
+    
+    
+    open (P, ">$out.html") || die "can not write to $out\n"; #open the outfile with .html extension for writing
+ 
+########################### write headings in the html file    #################################
+    print P <<STARTHTML;
+    <!DOCTYPE html>
+    <html>
+    <body>
+    
+    <h1>CADBURE Results of $align1_name versus $align2_name</h1>
+    
+    <p>First aligner: $align1_name, Second aligner: $align2_name.</p>
+        
+STARTHTML
+########################### END writing headings in the html file    #################################
+
+##############create first html table showing the numbers involved in scenarios###############
+    my $table = HTML::Table->new(
+        -class          => 'sortable',
+        -evenrowclass   => 'roweven',
+        -oddrowclass    => 'rowodd',
+        -head           => ['Scenario', 'First_Aligner', 'Second_Aligner'],    
+    );
+
+    $table->addRow( 1, $rec_eq, $rec_eq );
+    $table->addRow( 2, $G_ov_hg_gt3, $T_ov_hg_gt3 );
+    $table->addRow( 3, $G_ov_hg_ls2, $T_ov_hg_ls2 );
+    $table->addRow( 4, $diff_chr, $diff_chr );
+    $table->addRow( 5, $G_UQ_pre_T_NUQ, $T_UQ_pre_G_NUQ );
+    $table->addRow( 6, $G_UQ_T_NoMap, $T_UQ_G_NoMap );
+    $table->addRow( 7, $read_eq_NUQ, $read_eq_NUQ );
+    $table->addRow( 8, $G_NUQ_T_NoMap, $T_NUQ_G_NoMap );
+
+
+    #print P "Content-type: text/html\n\n";
+    
+    print P $table->getTable;
+    
+############## END first html table showing the numbers involved in scenarios###############    
+
+########################### write description of scenarios in the html file    #################################
+    print P <<MID1HTML;
+    <p>Scenarios<br>
+        (1) Whenever the two aligners (BAM files) uniquely map a particular read to the exact same location, CADBURE considers the result a true-positive mapping for both aligner<br>
+        (2) and (3) When the two aligners uniquely map a particular read to overlapping genomic locations, CADBURE distinguishes two scenarios. <br>
+	(2) In this case, CADBURE considers the un-spliced alignment or splice alignment with overhang more than two nucleotides a true-positive mapping because all or most nucleotides are continuously mapped by both aligners on the same genome location. Therefore, this is a highly probable correct alignment for this read (see Article Fig. 1c). <br> 
+	(3) If the overhang of the spliced alignment is just one or two nucleotides, i.e., only one or two nucleotides are aligned across an intron, CADBURE considers the spliced alignment as a false-positive alignment, given the high probability that the alignment is misplaced (see Article Fig. 1c).<br>
+    	(4) If both aligners uniquely map a particular read to different genomic locations, CADBURE assigns the mapping as false-positive because both aligners missed the possible read mapping reported by the other aligner and incorrectly reported the alignment as unique (see Article Fig 1d).<br>
+        (5) If one aligner maps a particular read uniquely and the other aligner maps the same read non-uniquely, CADBURE considers the uniquely aligned read as a false-positive alignment and the non-uniquely mapped read as a true-negative, non-unique mapping (see Article Fig. 1e). <br>
+        (6) If only one of the two aligners uniquely maps a particular sequence read, and if the other aligner fails to map this read at all (either as unique or non-unique), CADBURE considers the unique mapping a true-positive alignment (see Article Fig. 1f). <br>
+        (7) If both aligners map a particular read non-uniquely, CADBURE calls the alignment a true-negative, non-unique alignment (see Article Fig. 1g).<br>
+        (8) If one aligner maps a particular read non-uniquely and the other aligner fails to map the read as either unique or non-unique, CADBURE considers the alignment true-negative (see Article Fig 1h).<br>
+        </p>
+MID1HTML
+########################### END writing description of scenarios in the html file    #################################
+
+##############create second html table showing the numbers involved in scenarios###############
+    my $table2 = HTML::Table->new(
+        -class          => 'sortable',
+        -evenrowclass   => 'roweven',
+        -oddrowclass    => 'rowodd',
+        -head           => [qw/ Aligner True_Positives False_Positives True_Negatives Specificity Accuracy /],    
+    );
+    $table2->addRow($align1_name,$G_tp, $G_fp, $G_tn, $G_Sfy, $G_Acy );
+    $table2->addRow($align2_name,$T_tp, $T_fp, $T_tn, $T_Sfy, $T_Acy );
+    print P $table2->getTable;
+##############END create second html table showing the numbers involved in scenarios###############    
+
+    print P <<MID2HTML;
+    <p>True positives are obtained by adding scenarios 1+2+6<br>
+    	False positives are obtained by adding scenarios 3+4+5<br>
+    	True negatives are obtained by adding scenarios 7+8+ 5 from other aligner (See description above; fig. 1F)<br><br></p>
+MID2HTML
+
+    print P <<ENDHTML;
+    </body>
+    </html>
+
+ENDHTML
+
+######################end html##################
+
+
+}

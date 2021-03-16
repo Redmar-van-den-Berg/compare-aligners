@@ -1,0 +1,19 @@
+- name: dry-run-vanilla
+  tags:
+    - dry-run
+  command: >
+    snakemake
+      --dryrun
+      --reason
+      --printshellcmds
+      --snakefile Snakefile
+      --configfile tests/data/config/gsnap.json
+  exit_code: 0
+  stdout:
+    contains:
+      - gsnap-2014.12.23--gsnap-2021.02.22
+    must_not_contain:
+      - rror
+  stderr:
+    must_not_contain:
+      - rror
