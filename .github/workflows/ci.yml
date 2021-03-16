@@ -53,3 +53,12 @@ jobs:
           echo $file; cat $file
         done
         '
+
+    - name: Check all job log files in case of failure
+      if: ${{ failure() }}
+      run: >-
+        bash -c '
+        for file in $(find /tmp/pytest_workflow_*/${{ matrix.test}}/log/ -type f); do
+          echo $file; cat $file
+        done
+        '
