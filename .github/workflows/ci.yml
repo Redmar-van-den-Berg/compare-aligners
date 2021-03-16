@@ -15,7 +15,6 @@ jobs:
       matrix:
         test:
           - sanity-snakemake
-          - sanity-snakemake-lint
           - sanity-singularity
           - dry-run-vanilla
           - integration-vanilla
