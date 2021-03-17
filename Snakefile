@@ -46,7 +46,7 @@ rule align:
     log:
         "log/align.{version}.txt"
     shell: """
-        singularity run {input.image} gsnap \
+        singularity run --bind /tmp {input.image} gsnap \
             --dir `dirname {input.index}` \
             --db `basename {input.index}` \
             --batch 4 \
