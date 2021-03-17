@@ -17,3 +17,30 @@
   stderr:
     must_not_contain:
       - rror
+
+- name: dry-run-gsnap-4
+  tags:
+    - dry-run
+  command: >
+    snakemake
+      --dryrun
+      --reason
+      --printshellcmds
+      --snakefile Snakefile
+      --configfile tests/data/config/gsnap-4.json
+  exit_code: 0
+  stdout:
+    contains:
+      - gsnap-2014.12.23--gsnap-2015.12.31
+      - gsnap-2014.12.23--gsnap-2016.09.23
+      - gsnap-2014.12.23--gsnap-2021.02.22
+
+      - gsnap-2015.12.31--gsnap-2016.09.23
+      - gsnap-2015.12.31--gsnap-2021.02.22
+
+      - gsnap-2016.09.23--gsnap-2021.02.22
+    must_not_contain:
+      - rror
+  stderr:
+    must_not_contain:
+      - rror

@@ -1,0 +1,11 @@
+{
+    "forward": "tests/data/reads/SRR8615409_chrM_0.01_R1.fastq.gz",
+    "reverse": "tests/data/reads/SRR8615409_chrM_0.01_R2.fastq.gz",
+    "reference": "tests/data/reference/GCA_000001405.15_GRCh38_chrM.fna",
+    "aligners": {
+        "gsnap-2014.12.23": "docker://quay.io/biocontainers/gmap:2014.12.23--pl5.22.0_4",
+        "gsnap-2015.12.31": "docker://quay.io/biocontainers/gmap:2015.12.31--h2f06484_5",
+        "gsnap-2016.09.23": "docker://quay.io/biocontainers/gmap:2016.09.23--pl526_3",
+        "gsnap-2021.02.22": "docker://quay.io/biocontainers/gmap:2021.02.22--pl526h2f06484_0"
+    }
+}
